@@ -1,0 +1,1335 @@
+classdef EEGMatrixHandler
+    %EEGMATRIXHANDLER handles all EEG data analysis in one file in order to
+    %ease extension, accessibilty and transferrability of software.
+      
+    properties
+        data; %rows - stimulation %columns - condition
+        T; %TO-DO: Implement this as a separate structure with string references... 
+        channels;
+        a_type; %alignment type
+        Fs; %sampling frequency
+        Time; %time vector (for plotting)
+        Freq; %Frequencies for TFR
+        surfX; %Plotting surface X
+        surfY; %Plotting surface Y
+        NUM_COND = 11; %columns of LRVEC indexer - 10 without RT
+        LEFT = 1;
+        RIGHT = 2;
+        mode; %1 - Saccade, 2 - Arm Reach
+        savePath; %Specified savePath
+        meanTime; %mean reaction time
+        nP; % 95% movement range
+    end
+    
+    methods
+        
+        %% Constructor and initialization
+        function obj = EEGMatrixHandler(data, channels, alignType, Fs, meanTime,nineP,T)
+            obj.data = data;
+            obj.a_type = alignType;
+            obj.Fs = Fs;
+            obj.Time = ((1:size(data{1,1,1},2)-obj.NUM_COND-1)*(1/Fs)) - (251+meanTime)*(1/Fs);
+            obj.Freq = 1:45;
+            [obj.surfX, obj.surfY] = meshgrid(obj.Time,obj.Freq);
+            obj.channels = channels;
+            obj.savePath = cd;
+            obj.meanTime = meanTime;
+            obj.nP = nineP;
+            obj.T = T; 
+            
+            %Prompt user for type of experiment and set table header
+            obj.mode = input('Enter Experiment Type: \n RDM = 1 \n ARMREACH = 2 \n FC = 3 \n'); 
+            obj.T.Properties.VariableNames = obj.SetMode(obj.mode); 
+            
+            
+        end
+        
+        function varNames = SetMode(~,EMode) 
+            switch (EMode) 
+                case 1 %RDM
+                    varNames = {'Subject', 'Stim', 'Cond', 'Block' ...
+                        ,'Trial'}; 
+                case 2 %ARMREACH
+                    varNames = {'Subject', 'Stim', 'Cond', 'Block' ...
+                        ,'Trial', 'TIHP', 'targIHP', 'reachVec', 'EHemifield', 'LHemifield', 'RHemifield', ...
+                        'Reach', 'Target', 'None', 'IHP', 'RT'};
+                case 3 %FC
+                    varNames = {'Subject', 'Stim', 'Cond', 'Block' ...
+                        ,'Trial'};
+            end
+            
+        end
+        
+       %% General Data Accessing 
+        
+        %Returns specified matrix irrespective of grouping 
+        function selMat = SelectMatrix(obj,subject,condition,stimulation, bLaplace)
+            
+            selMat = vertcat(obj.data{stimulation,condition,subject});
+            if (bLaplace)
+                selMat = selMat - vertcat(obj.channels{stimulation,condition,subject});
+            end
+            
+            selMat(:,end-obj.NUM_COND:end) = [];
+            
+        end
+        
+        %Returns grouped matrices
+        function [lSelMat, rSelMat] = SelectGroupMatrix(obj,subject,condition,stimulation, bLaplace, group)
+            
+            selMat = vertcat(obj.data{stimulation,condition,subject});
+            if (bLaplace)
+                selMat = selMat - vertcat(obj.channels{stimulation,condition,subject});
+            end
+            
+            lSelMat = selMat(selMat(:,end-(group-2)) == obj.LEFT,:);
+            rSelMat = selMat(selMat(:,end-(group-2)) == obj.RIGHT,:);
+            
+            lSelMat(:,end-obj.NUM_COND:end) = [];
+            rSelMat(:,end-obj.NUM_COND:end) = [];
+            
+        end
+        
+        %Returns binned structure for a given grouping parameter (RT for
+        %now, expand if needed) 
+        function binMat = GroupEEG(obj,subject,condition,stimulation,bLaplace)
+            
+            %For a given grouping indexer sort trials
+            
+            %Divide into 20% bins - expand with additional binSize argument
+            %afterwards 
+            
+            %Return as an object array or something... 
+            
+        end
+        
+        
+        %% TFR Stuff
+        
+        %Compute TFR
+        function TFR = ComputeTFR(obj,subject,condition,stimulation, varargin)
+
+            validTypes = {'Pseudo-Z', 'Power'};
+            validLaplace = {'None', 'Laplacian'};
+            if (obj.mode == 1)
+                validGroup = {'None' 'Saccade' 'Target'};
+            else
+                validGroup = {'IHP' 'None' 'Target' 'Reach' 'RHemifield' 'LHemifield' 'EHemifield' 'MedianSplit'};
+            end
+          
+            Results = parseInput(obj.mode,varargin{:});
+            
+            TFRtype = find(strcmpi(validTypes,Results.TFRtype));
+            bLaplace = find(strcmpi(validLaplace,Results.SpatialFilter)) - 1;
+            groupType = find(strcmpi(validGroup,Results.Group));
+            
+            if (~strcmpi(Results.Group,'None'))
+                [lMat, rMat] = obj.SelectGroupMatrix(subject,condition,stimulation,bLaplace,groupType);
+                lTFRMat = MakeTFRP(lMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                lTFR = TFRObject(lTFRMat, TFRtype, subject, condition, stimulation, bLaplace,obj.LEFT);
+                
+                rTFRMat = MakeTFRP(rMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                rTFR = TFRObject(rTFRMat, TFRtype, subject, condition, stimulation, bLaplace,obj.RIGHT);
+                TFR = [lTFR, rTFR];
+                
+            else
+                curMat = obj.SelectMatrix(subject,condition,stimulation, bLaplace);
+                TFRMat = MakeTFRP(curMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                TFR = TFRObject(TFRMat, TFRtype, subject, condition, stimulation, bLaplace);
+            end
+            
+        end
+        
+        %Display TFR
+        function hFig = DispTFR(obj, TFR, varargin)
+            
+            
+            p = inputParser;
+            
+            defaultRange = [TFR.GetRange*-1 TFR.GetRange];
+            checkRange = @(x) isnumeric(x);
+            addParameter(p,'CAxis',defaultRange,checkRange);
+            
+            p.KeepUnmatched = true;
+            parse(p,varargin{:});
+            
+            c_range = p.Results.CAxis;
+            
+            a_Str = {'Target Onset' 'Movement Onset'};
+            t_str = {'Pseudo-Z' 'Power'};
+            d_str = {'Left' 'Right'};
+            
+            alignStr = a_Str{obj.a_type + 1};
+            
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            figure;
+            surf(obj.surfX,obj.surfY, TFR.GetTFR);
+            shading interp
+            view([0 0 1])
+            
+            
+            caxis([c_range(1) c_range(2)])
+            
+            
+            title([alignStr ' Direction ' d_str{TFR.GetDirection}]);
+            cc = colorbar;
+            ylabel(cc, t_str{TFR.GetType})
+            colormap('Jet');
+            hold on;
+            
+            xlim([X_MIN X_MAX])
+            
+            plot3([obj.Time(1) obj.Time(1)], [0 max(obj.Freq)], [2 2], 'k' );
+            plot3([obj.Time(251 + obj.meanTime) obj.Time(251 + obj.meanTime)], [0 max(obj.Freq)], [2 2], 'k' );
+            ylabel('Frequency (Hz)')
+            xlabel(['Time from ' a_Str ' (ms)']);
+            xlim([-0.5 0.22]);
+            hFig = gcf;
+            
+            
+        end
+        
+        %Save TFR from Object (for post TFR computations)
+        function SaveCTFR(obj,TFR,saveStr, varargin)
+            if nargin < 3
+                saveStr = '';
+            end
+            
+            c_cond = {'Pre' 'Post' 'DC'};
+            s_cond = {'A' 'C' 'DS'};
+            
+            hFig = obj.DispTFR(TFR, varargin{:});
+            
+            saveas(hFig, fullfile(obj.savePath,['TFR_s' num2str(TFR.GetSubject) ...
+                '_t' s_cond{TFR.GetStimulation} '_c' c_cond{TFR.GetCondition} saveStr]),'fig');
+            
+            
+        end
+        
+        %Subtracts TFR2 from TFR1
+        function TFR = GetDifference(~, TFR1, TFR2)
+            
+            %Check for conditional subtraction or stimulation subtraction
+            if (TFR1.GetStimulation ~= TFR2.GetStimulation)
+                stimulation = 3;
+            else
+                stimulation = TFR1.GetStimulation;
+            end
+            
+            if (TFR1.GetCondition ~= TFR2.GetCondition)
+                condition = 3;
+            else condition = TFR1.GetCondition;
+            end
+            
+            TFR = TFRObject(TFR1.GetTFR-TFR2.GetTFR,TFR1.GetType,TFR1.GetSubject,condition,stimulation, TFR1.GetFilter);
+        end
+        
+        %Vertically collapse array
+        function TFRArray = GetArrayDifference(obj,TFRArrayIn)
+            for i = 1:size(TFRArrayIn,2)
+                TFRArray(i) = obj.GetDifference(TFRArrayIn(1,i),TFRArrayIn(2,i));
+            end
+        end
+        
+        %Save TFR
+        function SaveTFR(obj,subject,condition,stimulation,varargin)
+            
+            p = inputParser;
+            
+            defaultType = 'Pseudo-Z';
+            validTypes = {'Pseudo-Z', 'Power'};
+            checkType = @(x) any(validatestring(x,validTypes));
+            
+            defaultLaplace = 'None';
+            validLaplace = {'None', 'Laplacian'};
+            checkLaplace = @(x) any(validatestring(x,validLaplace));
+            
+            addParameter(p, 'TFRtype', defaultType, checkType);
+            addParameter(p, 'SpatialFilter', defaultLaplace, checkLaplace);
+            
+            p.KeepUnmatched = true;
+            
+            parse(p,varargin{:});
+            
+            TFR = obj.ComputeTFR(subject,condition,stimulation, p.Results.TFRtype, p.Results.SpatialFilter);
+            
+            hFig = obj.DispTFR(TFR);
+            
+            c_cond = {'Pre' 'Post'};
+            s_cond = {'A' 'C'};
+            saveas(hFig, fullfile(obj.savePath,['TFR_s' num2str(subject) ...
+                '_t' s_cond{stimulation} '_c' c_cond{condition}]),'fig');
+            
+        end
+        
+        %Save all subjects TFR
+        function SaveAllTFR(obj, varargin)
+            
+            p = inputParser;
+            
+            defaultType = 'Pseudo-Z';
+            validTypes = {'Pseudo-Z', 'Power'};
+            checkType = @(x) any(validatestring(x,validTypes));
+            
+            defaultLaplace = 'None';
+            validLaplace = {'None', 'Laplacian'};
+            checkLaplace = @(x) any(validatestring(x,validLaplace));
+            
+            addParameter(p, 'TFRtype', defaultType, checkType);
+            addParameter(p, 'SpatialFilter', defaultLaplace, checkLaplace);
+            
+            p.KeepUnmatched = true;
+            
+            parse(p,varargin{:});
+            
+            c_cond = {'Pre' 'Post'};
+            s_cond = {'A' 'C'};
+            
+            for s = 1:size(obj.data,3)
+                for t = 1:size(obj.data,1)
+                    for c = 1:size(obj.data,2)
+                        TFR = obj.ComputeTFR(s,c,t,p.Results.TFRtype, p.Results.SpatialFilter);
+                        hFig = obj.DispTFR(TFR);
+                        
+                        saveas(hFig, fullfile(obj.savePath,['TFR_s' num2str(s) ...
+                            '_t' s_cond{t} '_c' c_cond{c}]),'fig');
+                    end
+                end
+            end
+            
+        end
+        
+        %Create graph of all subjects EEG
+        function saveAllEEG(obj,varargin)
+            p = inputParser;
+            
+            defaultLaplace = 'None';
+            validLaplace = {'None', 'Laplacian'};
+            checkLaplace = @(x) any(validatestring(x,validLaplace));
+            
+            addParameter(p, 'SpatialFilter', defaultLaplace, checkLaplace);
+            
+            p.KeepUnmatched = true;
+            
+            parse(p,varargin{:});
+            
+            
+            c_cond = {'Pre' 'Post'};
+            s_cond = {'A' 'C'};
+            
+            for s = 1:size(obj.data,3)
+                for t = 1:size(obj.data,1)
+                    for c = 1:size(obj.data,2)
+                        hFig = obj.dispEEG(s,c,t,p.Results.SpatialFilter);
+                        saveas(hFig, fullfile(obj.savePath,['EEG_s' num2str(s) ...
+                            '_t' s_cond{t} '_c' c_cond{c}]),'fig');
+                    end
+                end
+            end
+            
+        end
+        
+        %Compute correlations
+        function [S] = ComputeCorr(~, Obj_TFR1, Obj_TFR2)
+            
+            TFR1_all = [];
+            TFR2_all = [];
+            
+            
+            for s = 1:size(Obj_TFR1,2)
+                TFR1_all = cat(3,TFR1_all,Obj_TFR1(s).GetTFR);
+                TFR2_all = cat(3,TFR2_all,Obj_TFR2(s).GetTFR);
+                
+            end
+            
+            S = CorrTFR(TFR1_all,TFR2_all);
+            
+        end
+        
+        %Display correlational analysis results
+        function [hFig, hBFig] = DispCorr(obj, S, boolThres)
+            
+            if nargin < 3
+                boolThres = 0;
+            end
+            
+            if (boolThres)
+                S.r(S.P > 0.05) = NaN;
+                S.beta(S.P > 0.05) = NaN;
+            end
+            
+            a_Str = {'Target Onset' 'Movement Onset'};
+            alignStr = a_Str{obj.a_type + 1};
+            
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            figure;
+            surf(obj.surfX,obj.surfY, S.r);
+            shading interp
+            view([0 0 1])
+            
+            caxis([-1 1])
+            title(alignStr);
+            cc = colorbar;
+            ylabel(cc, 'Correlation Coefficient')
+            colormap('Jet');
+            hold on;
+            
+            xlim([X_MIN X_MAX])
+            
+            plot3([obj.Time(1) obj.Time(1)], [0 max(obj.Freq)], [2 2], 'k' );
+            plot3([obj.Time(251) obj.Time(251)], [0 max(obj.Freq)], [2 2], 'k' );
+            ylabel('Frequency (Hz)')
+            xlabel(['Time from ' a_Str ' (ms)']);
+            
+            hFig = gcf;
+            
+            figure;
+            surf(obj.surfX,obj.surfY, S.beta);
+            shading interp
+            view([0 0 1])
+            
+            title(alignStr);
+            cc = colorbar;
+            ylabel(cc, 'Beta Value')
+            colormap('Jet');
+            hold on;
+            caxis([-5 5]);
+            xlim([X_MIN X_MAX])
+            
+            plot3([obj.Time(1) obj.Time(1)], [0 max(obj.Freq)], [2 2], 'k' );
+            plot3([obj.Time(251) obj.Time(251)], [0 max(obj.Freq)], [2 2], 'k' );
+            
+            xlabel(['Time from ' a_Str ' (ms)']);
+            ylabel('Frequency (Hz)')
+            
+            hBFig = gcf;
+            
+            
+            
+        end
+        
+        %Display correlational analysis results
+        function [hFig, hBFig] = DispCoeff(obj, coeffMat)
+                        
+            a_Str = {'Target Onset' 'Movement Onset'};
+            alignStr = a_Str{obj.a_type + 1};
+            
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            figure;
+            surf(obj.surfX,obj.surfY, coeffMat);
+            shading interp
+            view([0 0 1])
+            
+            caxis([-1 1])
+            title(alignStr);
+            cc = colorbar;
+            ylabel(cc, 'Correlation Coefficient')
+            colormap('Jet');
+            hold on;
+            
+            xlim([X_MIN X_MAX])
+            
+            plot3([obj.Time(1) obj.Time(1)], [0 max(obj.Freq)], [2 2], 'k' );
+            plot3([obj.Time(251) obj.Time(251)], [0 max(obj.Freq)], [2 2], 'k' );
+            ylabel('Frequency (Hz)')
+            xlabel(['Time from ' a_Str ' (ms)']);            
+        end
+        
+        %Get Mean of TFR Objects
+        function Obj_TFR = TFRMean(~,TFRArray)
+            TFR = zeros(size(TFRArray(1).GetTFR));
+            
+            for i = 1:length(TFRArray)
+                TFR = TFR + TFRArray(i).GetTFR;
+            end
+            
+            mTFR = TFR/length(TFRArray);
+            
+            Obj_TFR = TFRObject(mTFR,TFRArray(1).GetType, 0, TFRArray(1).GetCondition, ...
+                TFRArray(1).GetStimulation, TFRArray(1).GetFilter, TFRArray(1).GetDirection);
+            
+        end
+        
+        %Get Variance of TFR Objects
+        function Obj_TFR = TFRVar(obj,TFRArray)
+            
+            mTFR = obj.TFRMean(TFRArray);
+            sqTFR = zeros(size(TFRArray(1).GetTFR));
+            for i = 1:length(TFRArray)
+                sqTFR = sqTFR + (TFRArray(i).GetTFR - mTFR.GetTFR).^2;
+            end
+            
+            varTFR = sqTFR / length(TFRArray);
+            
+            Obj_TFR = TFRObject(varTFR,TFRArray(1).GetType, 0, TFRArray(1).GetCondition, ...
+                TFRArray(1).GetStimulation, TFRArray(1).GetFilter, TFRArray(1).GetDirection);
+            
+        end
+        
+        %Compute for all subjects
+        function TFRArray = ComputeAllTFR(obj, condition,stimulation, varargin)
+            
+            for i = 1:size(obj.data,3)
+                TFRArray(:,i) = obj.ComputeTFR(i,condition,stimulation,varargin{:});
+            end
+            
+        end
+        
+        %Perform a RankSum test using baseline period
+        function RSMatrix = RankSum(~,TFRArray)
+            
+            baseSet = 251;
+            
+            %Get subject TFR arrays
+            for i = 1:length(TFRArray)
+                TFR(:,:,i) = TFRArray(i).GetTFR;
+            end
+            
+            disp('Computing Ranksum...')
+            
+            allBaseTFR = TFR(:,1:baseSet,:);
+            baseTFR = squeeze(mean(allBaseTFR,2));
+            
+            %Compute rank sum for each frequency
+            for i = 1:size(TFR,1)
+                
+                basePixel = baseTFR(i,:);
+                basePixel = basePixel(:);
+                
+                for j = 1:(size(TFR,2))
+                    %Grab freq/timebin to be tested across all subjects
+                    testPixel = TFR(i,j,:);
+                    testPixel = testPixel(:);
+                    
+                    %Get the ranksum test of pixel
+                    rPixel(i,j) = ranksum(testPixel,basePixel);
+                end
+            end
+            
+            RSMatrix = rPixel < 0.05;
+            
+            
+        end
+        
+        %Apply indexer to TFRs
+        function TFRFilt = ApplyIndexFilt(~,TFRArray, IndFilter)
+            
+            for i = 1:length(TFRArray)
+                TFRArray(i).TFR(~IndFilter) = NaN;
+            end
+            
+            TFRFilt = TFRArray;
+        end
+        
+        %Restricted window test
+        function pTFR = TestTFR(obj,TFRArray,window)
+            
+            %If window not specified, perform test on all pixel units
+            if (nargin < 2)
+                window = 1:length(obj.Time);
+            end
+            
+            for i = 1:length(TFRArray)
+                TFR(:,:,i) = TFRArray(i).GetTFR;
+            end
+            
+            %Create a building matrix
+            pTFR = [];
+            
+            for i = window(1):window(end)
+                %Get current time slot across all frequencies
+                timeSlice = squeeze(TFR(:,i,:))';
+                [~,sliceP] = ttest(timeSlice);
+                pTFR = [pTFR sliceP'];
+            end
+            
+            
+            %Fill in NaNs in out of window values such that only values are
+            %defined within the window specified
+            nanWindow = nan(45,length(obj.Time));
+            nanWindow(:,window) = pTFR;
+            pTFR = nanWindow;
+            
+        end
+        
+        %% Phase Analysis
+        
+        function PLOC = ComputePhase(obj,subject,condition,stimulation,varargin)
+            validTypes = {'Pseudo-Z', 'Power'};
+            validLaplace = {'None', 'Laplacian'};
+            if (obj.mode == 1)
+                validGroup = {'None' 'Saccade' 'Target'};
+            else
+                validGroup = {'IHP' 'None' 'Target' 'Reach' 'RHemifield' 'LHemifield' 'EHemifield' 'MedianSplit'};
+            end
+            
+            Results = parseInput(obj.mode,varargin{:});
+            
+            TFRtype = find(strcmpi(validTypes,Results.TFRtype));
+            bLaplace = find(strcmpi(validLaplace,Results.SpatialFilter)) - 1;
+            groupType = find(strcmpi(validGroup,Results.Group));
+            
+            if (~strcmpi(Results.Group,'None'))
+                [lMat, rMat] = obj.SelectGroupMatrix(subject,condition,stimulation,bLaplace,groupType);
+                [~,lPLOCMat] = MakeTFRP(lMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                lTFR = TFRObject(lPLOCMat, TFRtype, subject, condition, stimulation, bLaplace,obj.LEFT);
+                
+                [~,rPLOCMat] = MakeTFRP(rMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                rTFR = TFRObject(rPLOCMat, TFRtype, subject, condition, stimulation, bLaplace,obj.RIGHT);
+                PLOC = [lTFR, rTFR];
+                
+            else
+                curMat = obj.SelectMatrix(subject,condition,stimulation, bLaplace);
+                [~,PLOCMat] = MakeTFRP(curMat(:,1:end)',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], TFRtype);
+                PLOC = TFRObject(PLOCMat, TFRtype, subject, condition, stimulation, bLaplace);
+            end
+            
+        end
+        
+        function DispPhase(obj,TFR, trial, varargin)
+            
+            p = inputParser;
+            
+            defaultRange = [TFR.GetRange*-1 TFR.GetRange];
+            checkRange = @(x) isnumeric(x);
+            addParameter(p,'CAxis',defaultRange,checkRange);
+            
+            p.KeepUnmatched = true;
+            parse(p,varargin{:});
+            
+            c_range = p.Results.CAxis;
+            
+            a_Str = {'Target Onset' 'Movement Onset'};
+            t_str = {'Pseudo-Z' 'Power'};
+            d_str = {'Left' 'Right'};
+            
+            alignStr = a_Str{obj.a_type + 1};
+            
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            trialPhase = TFR.GetTFR; 
+            
+            figure;
+            surf(obj.surfX,obj.surfY, trialPhase(:,:,trial));
+            shading interp
+            view([0 0 1])
+            
+            
+            caxis([c_range(1) c_range(2)])
+            
+            
+            title([alignStr ' Direction ' d_str{TFR.GetDirection}]);
+            cc = colorbar;
+            ylabel(cc, t_str{TFR.GetType})
+            colormap('Jet');
+            hold on;
+            
+            xlim([X_MIN X_MAX])
+            
+            plot3([obj.Time(1) obj.Time(1)], [0 max(obj.Freq)], [2 2], 'k' );
+            plot3([obj.Time(251 + obj.meanTime) obj.Time(251 + obj.meanTime)], [0 max(obj.Freq)], [2 2], 'k' );
+            ylabel('Frequency (Hz)')
+            xlabel(['Time from ' a_Str ' (ms)']);
+            xlim([-0.5 0.22]);
+            hFig = gcf;
+            
+        end
+        
+        function ITC = ComputeITC(~,TFR)
+            
+            phAng = TFR.GetTFR; 
+            euForm = zeros(size(phAng,1),size(phAng,2)); 
+            for j = 1:size(phAng,3)
+                
+                %Compute exponent for each phase TFR
+                euForm = euForm + exp(1i * phAng(:,:,j)); 
+                
+            end
+            ITC = TFR;
+            ITC.TFR = abs(euForm)./size(phAng,3); 
+            
+            
+        end
+        
+        %% Behavioural Correlations
+        
+        %Grab a matrix for a given type of behavioural grouping
+        function specMat = SpecifyMatrix(obj,subject,condition,stimulation,group)
+            
+            selMat = vertcat(obj.data{stimulation,condition,subject});
+            selMat = selMat - vertcat(obj.channels{stimulation,condition,subject});
+            
+            typeCol = size(selMat,2) - obj.NUM_COND + group; 
+            d_val = unique(selMat(:,typeCol));
+            d_val(isnan(d_val)) = []; 
+            d_val(d_val == 0) = []; 
+            for i = 1:length(d_val)
+                specMat{i} = selMat(selMat(:,typeCol) == d_val(i),1:end-(obj.NUM_COND+1));
+            end
+            
+        end
+        
+        %Compute EEG blocks for each behavioural grouping
+        function specEEG = ComputeSpecEEG(obj,subject,condition,stimulation,varargin)
+           
+            p = inputParser;
+            
+            defaultGroup = 'Target';
+            validGroup = {'Target' 'TIHP' 'Reach'};
+            checkGroup = @(x) any(validatestring(x,validGroup));
+            addParameter(p, 'Group', defaultGroup, checkGroup);
+            
+            p.KeepUnmatched = true;
+            parse(p,varargin{:});
+            
+            groupType = find(strcmpi(validGroup,p.Results.Group));
+            
+            specMat = obj.SpecifyMatrix(subject,condition,stimulation,groupType);
+            
+            %Normalize 
+            for k =1:length(specMat)
+                
+                EEG = specMat{k};
+                
+                for i = 1:size(EEG,1)
+                    mu = mean(EEG(i,1:251));
+                    sd = std(EEG(i,:));
+                    
+                    B(i,:) = EEG(i,:) - mu;
+                    S(:,i) = sd;
+                end
+                
+                specEEG{k} = mean(B,1)/mean(S);
+            end
+        end
+        
+        %Compute EEG blocks for each behavioural grouping across all
+        %subjects
+        function EEGArray = ComputeAllSpecEEG(obj,condition,stimulation,varargin)
+            for i = 1:size(obj.data,3)
+               EEGArray(i,:) = obj.ComputeSpecEEG(i,condition,stimulation,varargin{:});
+            end
+        end
+        
+        %Compute TFR, grouped behaviourally
+        function TFR = ComputeSpecTFR(obj,subject,condition,stimulation,varargin)
+            
+            p = inputParser;
+            
+            defaultGroup = 'Target';
+            validGroup = {'Target' 'TIHP' 'Reach'};
+            checkGroup = @(x) any(validatestring(x,validGroup));
+            addParameter(p, 'Group', defaultGroup, checkGroup);
+                        
+            p.KeepUnmatched = true;
+            parse(p,varargin{:});
+            
+            groupType = find(strcmpi(validGroup,p.Results.Group));
+            
+            specMat = obj.SpecifyMatrix(subject,condition,stimulation,groupType);
+            
+            
+            %Conditionals 
+            for i = 1:length(specMat); 
+                TFRMat = MakeTFRP(specMat{i}',obj.Freq,obj.Time(1:end-obj.NUM_COND),obj.Fs,7,[obj.Time(1) obj.Time(251)], 1);
+                TFR(1,i) = TFRObject(TFRMat, 1, subject, condition, stimulation, 1);
+            end
+            
+        end
+        
+        %Compute TFR, grouped behaviourally, all subjects
+        function TFRArray = ComputeAllSpec(obj,condition,stimulation,varargin)
+            
+            for i = 1:size(obj.data,3)
+                TFRArray(i,:) = obj.ComputeSpecTFR(i,condition,stimulation,varargin{:});
+            end
+            
+        end
+        
+        %Perform a block subtraction across two sets (TFR1 - TFR2) 
+        function subArray = SubtractBlock(~,TFR1,TFR2)
+                        
+            for i = 1:numel(TFR1)
+                
+                subTFR = TFR1(i).GetTFR - TFR2(i).GetTFR;
+                subArray(i) = TFR1(i);
+                subArray(i).TFR = subTFR;
+                
+            end
+            
+            %Reform the original matrix 
+            subArray = subArray'; 
+            subArray = reshape(subArray,size(TFR1)); 
+            
+        end
+        
+        %Regress within a given TFR across TFR values (depreciated, use
+        %RegWinTFR for access to frequency windows)
+        function regTFR = RegSpecTFR(obj,TFRBlock,regMat,win)
+            
+            if nargin < 4
+                win = 1:length(obj.Time); 
+            end
+            
+            regMat = [ones(length(regMat),1) regMat'];
+            
+            for sub = 1:size(TFRBlock,1)
+                
+                %Extract target TFRs
+                for targ = 1:size(TFRBlock,2)
+                    
+                    TFR(:,:,targ) = TFRBlock(sub,targ).GetTFR; 
+                    
+                end
+                
+                %Perform regressions across third dimension with feature
+                %input regMat
+                for j = win(1):win(end)
+                    for k = 1:size(TFR,1)
+                        b = regress(squeeze(TFR(k,j,:)),regMat); 
+                        beta(k,j) = b(2); 
+                    end
+                end
+              
+                %Create coeff matrix and meet sizing specification 
+                regTFR(:,:,sub) = [beta zeros(k,length(j+1:size(TFR,2)))]; 
+                                
+            end
+            
+        end
+        
+        %Regress within a given TFR window across TFR values
+        function regTFR = RegWinTFR(~,TFRBlock,regMat,win,fwin)
+            
+            regMat = [ones(length(regMat),1) regMat'];
+            
+            for sub = 1:size(TFRBlock,1)
+                
+                %Extract target TFRs
+                for targ = 1:size(TFRBlock,2)
+                    
+                    TFR(:,:,targ) = TFRBlock(sub,targ).GetTFR; 
+                    
+                end
+                
+                %Take a windowed average for variable 
+                avgTFR = squeeze(mean(mean(TFR(fwin,win,:)))); 
+                                
+                %Perform regressions across third dimension with feature
+                %input regMat
+                for i = 1:length(avgTFR)
+                    b = regress(avgTFR,regMat); 
+                    regTFR(sub) = b(2);
+                end
+              
+                %Create coeff matrix and meet sizing specification 
+                
+                                
+            end
+            
+        end
+        
+        %Regress within a given EEG window
+        function regEEG = RegSpecEEG(~,EEGBlock,regMat,win)
+            
+            regMat = [ones(length(regMat),1) regMat'];
+            
+            %Compute average of each window in the EEGBlock
+            for sub = 1:size(EEGBlock,1)
+                
+                subBlock = EEGBlock(sub,:); 
+                
+                for i = 1:size(EEGBlock,2)
+                    specBlock = subBlock{i}; 
+                    avgEEG(i) = mean(specBlock(win)); 
+                end
+                
+                %Now regress
+                b = regress(avgEEG',regMat); 
+                regEEG(sub) = b(2); 
+            end
+        end
+        
+        %Correlate with input data, slope TFR is given by regTFR (slopes
+        %across TFRs across trial conditions) 
+        function [corrTFR,betaTFR] = CorrSpecTFR(obj,SlopeTFR,inputData,win)
+            
+            if nargin < 4
+                win = 1:length(obj.Time); 
+            end
+            
+            if nargin < 5
+                thres = 1; 
+            end
+             
+            if(isa(SlopeTFR(1),'TFRObject'))
+                for sub = 1:length(SlopeTFR)
+                    TFR(:,:,sub) = SlopeTFR(sub).GetTFR; 
+                end
+                
+                SlopeTFR = TFR; 
+            end
+                        
+            for k = win(1):win(end)
+                for j = 1:size(SlopeTFR,1)
+                    
+                    [rscore, P] = corrcoef(squeeze(SlopeTFR(j,k,:))',inputData); 
+                    corrTFR(j,k) = rscore(2); 
+                    thresTFR(j,k) = P(2);   
+                    
+                    %Get beta values
+                    fitMat = polyfit(inputData(:),squeeze(SlopeTFR(j,k,:)),1);
+                    betaTFR(j,k) = fitMat(1);
+                end
+            end
+            
+            corrTFR = [corrTFR zeros(j,length(k+1:size(SlopeTFR,2)))]; 
+            betaTFR = [betaTFR zeros(j,length(k+1:size(SlopeTFR,2)))]; 
+            thresTFR = [thresTFR nan(j,length(k+1:size(SlopeTFR,2)))]; 
+            
+            %Clean up thresholding matrix
+            thresTFR(:,1:win(1)-1) = NaN; 
+            
+            if (thres)
+                %Apply threshold
+                corrTFR(thresTFR > 0.05) = NaN; 
+                betaTFR(thresTFR > 0.05) = NaN; 
+            end
+        end
+        
+        %Extract window components of TFR
+        function waTFR = ExtractWinAvg(~,TFRArray,winTime,winFreq)
+            
+            %Construct an average TFR matrix from the array for each
+            %subject
+            for i = 1:length(TFRArray)
+                TFR(:,:,i) = TFRArray(i).GetTFR; 
+            end
+            
+            %Select window
+            selectedTFR = TFR(winFreq,winTime,:); 
+            
+            %Take average across all participants 
+            waTFR = mean(selectedTFR,1); 
+            waTFR = mean(waTFR,2); 
+            waTFR = squeeze(waTFR); 
+        end
+        
+        %% EEG Stuff
+        
+        %Display EEG
+        function hFig = dispEEG(obj, subject, condition, stimulation, varargin)
+            
+            results = parseInput(varargin{:});
+            
+            p = inputParser;
+            
+            defaultLaplace = 'None';
+            validLaplace = {'None', 'Laplacian'};
+            checkLaplace = @(x) any(validatestring(x,validLaplace));
+            
+            addParameter(p, 'SpatialFilter', defaultLaplace, checkLaplace);
+            
+            p.KeepUnmatched = true;
+            
+            parse(p,varargin{:});
+            
+            bLaplace = find(strcmpi(validLaplace,results.SpatialFilter)) - 1;
+            
+            meanMat = obj.getEEGMean(subject,condition,stimulation, bLaplace);
+            varMat = obj.getEEGVar(subject,condition,stimulation, bLaplace);
+            posVarMat = meanMat + varMat;
+            negVarMat = meanMat - varMat;
+            
+            figure;
+            plot(obj.Time,meanMat,'b', 'LineWidth', 1.5);
+            hold on;
+            plot([obj.Time(1) obj.Time(end)],[0 0], 'k--', 'LineWidth', 1); hold on;
+            patch([obj.Time fliplr(obj.Time)], [posVarMat fliplr(negVarMat)], 'c', 'FaceAlpha', 0.5, 'EdgeColor', 'w');
+            if (~bLaplace)
+                y = ylim;
+            else
+                y = [-0.1 0.1];
+            end
+            plot([0 0], [y(1) y(2)], 'k:', 'LineWidth', 1.5);
+            hFig = gcf;
+        end
+        
+        %Save a specific EEG
+        function saveEEG(obj, subject, condition, stimulation, varargin)
+            
+            hFig = obj.dispEEG(subject, condition, stimulation, varargin{:});
+            
+            c_cond = {'Pre' 'Post'};
+            s_cond = {'A' 'C'};
+            saveas(hFig, fullfile(obj.savePath,['EEG_s' num2str(subject) ...
+                '_t' s_cond{stimulation} '_c' c_cond{condition}]),'fig');
+            
+        end
+        
+        %Compute EEG mean
+        function meanMat = getEEGMean(obj, subject, condition, stimulation, bLaplace)
+            
+            mat = obj.SelectMatrix(subject,condition,stimulation, bLaplace);
+            meanMat = mean(mat,1);
+            
+        end
+        
+        %Compute EEG variance
+        function varMat = getEEGVar(obj,subject,condition,stimulation, bLaplace)
+            
+            mat = obj.SelectMatrix(subject,condition,stimulation, bLaplace);
+            varMat = var(mat,[],1);
+            
+        end
+        
+        %Normalize EEG
+        function NEEG = NormalizeEEG(obj,subject,condition,stimulation,varargin)
+            
+            [~,group] = parseInput(obj.mode,varargin{:});
+            
+            %Select the matrix, EEG is also left in grouped cases
+            [EEG,rEEG] = obj.SelectGroupMatrix(subject,condition,stimulation,1,group);
+            
+            %Get baseline subtracted signal + variability
+            for i = 1:size(EEG,1)
+                mu = mean(EEG(i,1:251));
+                sd = std(EEG(i,:));
+                
+                B(i,:) = EEG(i,:) - mu;
+                S(:,i) = sd;
+            end
+            
+            NEEG = mean(B,1)/mean(S);
+            
+            if (~isempty(rEEG))
+                for i = 1:size(rEEG,1)
+                    rmu = mean(rEEG(i,1:251));
+                    rsd = std(rEEG(i,:));
+                    
+                    rB(i,:) = rEEG(i,:) - rmu;
+                    rS(:,i) = rsd;
+                end
+                rNEEG = mean(rB,1)/mean(rS);
+                NEEG = cat(3,NEEG,rNEEG);
+            end
+            
+        end
+        
+        %Normalize EEGs across all subjects
+        function EEGObj = NormalizeAllEEG(obj,condition,stimulation,varargin)
+            
+            EEGObj.data = [];
+            for i = 1:size(obj.data,3)
+                EEGObj.data = cat(1,EEGObj.data,obj.NormalizeEEG(i,condition,stimulation,varargin{:}));
+            end
+            
+            EEGObj.condition = condition;
+            EEGObj.stimulation = stimulation;
+            
+            if (size(EEGObj.data,3) == 2)
+                EEGObj.lr = 1;
+            else
+                EEGObj.lr = 0;
+            end
+            
+        end
+        
+        %Plot subjects individually
+        function hFig = EEGAllZFig(obj,EEGObj)
+            
+            c_lr = {'Left','Right'};
+            for lr = 1:size(EEGObj.data,3)
+                if (EEGObj.lr)
+                    d_type = c_lr{lr};
+                else
+                    d_type = 'Ungrouped';
+                end
+                for i = 1:size(EEGObj.data,1)
+                    meanMat = EEGObj.data(i,:,lr);
+                    figure;
+                    plot(obj.Time,meanMat,'b', 'LineWidth', 1.5);
+                    hold on;
+                    plot([obj.Time(1) obj.Time(end)],[0 0], 'k--', 'LineWidth', 1); hold on;
+                    y = [-0.1 0.1];
+                    plot([0 0], [y(1) y(2)], 'k:', 'LineWidth', 1.5);
+                    hFig = gcf;
+                    title(['Subject ' num2str(i) ' ' d_type]);
+                end
+            end
+        end
+        
+        %Compute differences between left and right
+        function EEGO = GetEEGDiff(~,EEGObj)
+            EEGO = EEGObj;
+            if (size(EEGObj.data,3) > 1)
+                EEGO.data = EEGObj.data(:,:,1) - EEGObj.data(:,:,2);
+            else
+                disp('Object contains ungrouped data...');
+            end
+        end
+        
+        %Significant from zero testing
+        function pTest = TestEEG(~,EEGObj)
+            
+            for i = 1:size(EEGObj.data,3)
+                for j = 1:size(EEGObj.data,2)
+                    [~,pTest(i,j)] = ttest(EEGObj.data(:,j,i));
+                end
+            end
+        end
+        
+        %Compute an average between 2 EEG data sets
+        function avgEEGObj = Avg2Sets(~,EEGObj1,EEGObj2)
+            
+            z = (EEGObj1.data + EEGObj2.data)./2;
+            
+            avgEEGObj.data = z;
+            avgEEGObj.condition = 1;
+            avgEEGObj.stimulation = 3;
+            
+        end
+        
+        %Compute difference between 2 EEG data sets
+        function diffEEGObj = Diff2Sets(~,EEGObj1,EEGObj2)
+            
+            z = EEGObj2.data - EEGObj1.data;
+            
+            diffEEGObj.data = z;
+            diffEEGObj.condition = 3;
+            diffEEGObj.stimulation = EEGObj1.stimulation;
+        end
+        
+        %Returns windowed EEG
+        function sEEG = SWinEEG(~,EEGObj)
+            winSize = 24;
+            eegdata = EEGObj.data;
+            
+            %First extract variance of signal
+            
+            for i = winSize/2+1:size(eegdata,2)-winSize/2
+                sAvg(:,i) = mean(eegdata(:,i-winSize/2:i+winSize/2),2);
+            end
+            
+            EEGObj.data = sAvg;
+            sEEG = EEGObj;
+            sEEG.winSize = 24/2;
+        end
+        
+        %Plotting Function for EEG from data (depreciated) 
+        function hFig = EEGFig(obj,EEGObj,pTest)
+            
+            meanMat = mean(EEGObj.data,1);
+            varMat = var(EEGObj.data,[],1);
+            
+            posVarMat = meanMat + varMat;
+            negVarMat = meanMat - varMat;
+            
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            figure;
+            plot(obj.Time,meanMat,'k', 'LineWidth', 1.5);
+            hold on;
+            plot([obj.Time(1) obj.Time(end)],[0 0], 'k--', 'LineWidth', 1); hold on;
+            patch([obj.Time fliplr(obj.Time)], [posVarMat fliplr(negVarMat)],...
+                'k', 'FaceAlpha', 0.3, 'EdgeColor', 'w');
+            
+            y = [-0.5 0.5];
+            plot([0 0], [y(1) y(2)], 'k:', 'LineWidth', 1.5); hold on;
+            xlim([X_MIN X_MAX]);
+            ylim([y(1) y(2)]);
+            if (obj.a_type == 0)
+                %Include patch for 90% movement
+                timeNP = obj.Time(obj.nP(1)+251:obj.nP(2)+251);
+                patch([timeNP fliplr(timeNP)], [y(2)*ones(length(timeNP),1)' y(1)*ones(length(timeNP),1)'], 'c',...
+                    'FaceAlpha',0.1,'EdgeColor','c');
+            end
+            hFig = gcf;
+            
+            
+            %If pTest input given then add a significance patch
+            if (nargin == 3)
+                hSig = find(pTest < 0.05);
+                ranges = group(hSig,1,3);
+                
+                %Now for each group
+                for i = 1:length(ranges)/2
+                    %Patch the area red
+                    patchArea = hSig(ranges(2*i-1):ranges(2*i));
+                    patch([obj.Time(patchArea) ...
+                        fliplr(obj.Time(patchArea))], ...
+                        [posVarMat(patchArea) fliplr(negVarMat(patchArea))], 'r', ...
+                        'FaceAlpha', 0.5, 'EdgeColor', 'r');
+                    
+                end
+            end
+            
+        end
+        
+        %Plot EEG with windowed significance patches
+        function hFig = PlotSWin(obj,EEGObj,pTest)
+            
+            meanMat = mean(EEGObj.data,1);
+            varMat = var(EEGObj.data,[],1);
+            
+            posVarMat = meanMat + varMat;
+            negVarMat = meanMat - varMat;
+            winSize = EEGObj.winSize;
+            xl = [-0.5 -0.8];
+            X_MIN = xl(obj.a_type + 1);
+            X_MAX = 1.0;
+            
+            figure;
+            plot(obj.Time(winSize+1:end-winSize),meanMat(winSize+1:end),'k', 'LineWidth', 1.5);
+            hold on;
+            plot([obj.Time(winSize+1) obj.Time(end-winSize)],[0 0], 'k--', 'LineWidth', 1); hold on;
+            patch([obj.Time(winSize+1:end-winSize) fliplr(obj.Time(winSize+1:end-winSize))], [posVarMat(winSize+1:end) fliplr(negVarMat(winSize+1:end))],...
+                'k', 'FaceAlpha', 0.3, 'EdgeColor', 'w');
+            
+            %Set limits properly
+            y = [-0.5 0.5];
+            plot([0 0], [y(1) y(2)], 'k:', 'LineWidth', 1.5); hold on;
+            xlim([X_MIN X_MAX]);
+            ylim([-0.5 0.5]);
+            
+            
+            
+            %If pTest input given then add a significance patch
+            if (nargin == 3)
+                hSig = find(pTest < 0.05);
+                ranges = group(hSig,1,3);
+                
+                %Now for each group
+                for i = 1:length(ranges)/2
+                    %Patch the area red
+                    patchArea = hSig(ranges(2*i-1):ranges(2*i));
+                    patch([obj.Time(patchArea) ...
+                        fliplr(obj.Time(patchArea))], ...
+                        [posVarMat(patchArea) fliplr(negVarMat(patchArea))], 'r', ...
+                        'FaceAlpha', 0.5, 'EdgeColor', 'r');
+                    
+                end
+            end
+            
+            if (obj.a_type == 0)
+                %Include patch for 90% movement
+                timeNP = obj.Time(obj.nP(1)+251:obj.nP(2)+251);
+                patch([timeNP fliplr(timeNP)], [y(2)*ones(length(timeNP),1)' y(1)*ones(length(timeNP),1)'], 'c',...
+                    'FaceAlpha',0.1,'EdgeColor','c');
+            end
+            
+            hFig = gcf;
+            
+        end
+        
+        %Compute all statistics for a selected EEG window
+        function windowEEG = PickWin(obj,EEGObj,winVector)
+            windowEEG = EEGObj;
+            windowEEG.data = EEGObj.data(:,winVector);
+            windowEEG.winAvg = mean(windowEEG.data,2);
+            [windowEEG.hTest, windowEEG.pTest] = ttest(windowEEG.winAvg);
+            windowEEG.meanAvg = mean(windowEEG.winAvg);
+            windowEEG.varAvg = var(windowEEG.winAvg);
+            windowEEG.stdEr = std(windowEEG.winAvg)/sqrt(length(windowEEG.winAvg));
+        end
+                
+    end
+    
+end
+
+%% Local methods
+%Return a specified field of struct
+function value = getFieldi(S,field)
+names = fieldnames(S);
+isField = strcmpi(field,names);
+
+if any(isField)
+    value = S.(names{isField});
+else
+    value = [];
+end
+end
+
+%Input parsing function
+function [results,gVal] = parseInput(eMode,varargin)
+p = inputParser;
+
+defaultType = 'Pseudo-Z';
+validTypes = {'Pseudo-Z', 'Power'};
+checkType = @(x) any(validatestring(x,validTypes));
+
+defaultLaplace = 'None';
+validLaplace = {'None', 'Laplacian'};
+checkLaplace = @(x) any(validatestring(x,validLaplace));
+
+defaultGroup = 'None';
+if (eMode == 1) %RDM
+    validGroup = {'None' 'Saccade' 'Target'};
+elseif (eMode == 2) %ARMREACH
+    validGroup = {'IHP' 'None' 'Target' 'Reach' 'RHemifield' 'LHemifield',...
+        'EHemifield' 'MedianSplit','TIHP','TargIHP','ReachVec'};
+elseif (eMode == 3) %FC
+    validGroup = {}; 
+end
+checkGroup = @(x) any(validatestring(x,validGroup));
+
+addParameter(p, 'TFRtype', defaultType, checkType);
+addParameter(p, 'SpatialFilter', defaultLaplace, checkLaplace);
+addParameter(p, 'Group', defaultGroup, checkGroup);
+
+p.KeepUnmatched = true;
+
+parse(p,varargin{:});
+
+gVal = find(strcmpi(validGroup,p.Results.Group));
+results = p.Results;
+end
+
+function [ S ] = CorrTFR( TFR1, TFR2 )
+
+%Pre-allocate
+rVal = zeros(size(TFR1(:,:,1)));
+pVal = zeros(size(TFR1(:,:,1)));
+beta = zeros(size(TFR1(:,:,1)));
+
+%Perform pixel-wise correlations
+for i = 1:size(TFR1,1)
+    for j = 1:size(TFR1,2)
+        pixel_1 = TFR1(i,j,:);
+        pixel_1 = pixel_1(:);
+        
+        pixel_2 = TFR2(i,j,:);
+        pixel_2 = pixel_2(:);
+        
+        [corMat, P] = corrcoef(pixel_1,pixel_2);
+        
+        fit_pixel = polyfit(pixel_1,pixel_2,1);
+        
+        rVal(i,j) = corMat(2);
+        pVal(i,j) = P(2);
+        beta(i,j) = fit_pixel(1);
+        
+    end
+end
+
+S.r = rVal;
+S.P = pVal;
+S.beta = beta;
+
+
+end
+
+

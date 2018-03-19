@@ -1,0 +1,114 @@
+function [ PhaseTFR ] = PhaseTFR( S, freqVec, timeVec, Fs, width, timeInt, sampAlign )
+%PHASETFR Compute phase shifts relative to an alignment sample (sampAlign)
+%across trials then take circular mean across trials to compute average
+%phase delay
+%   See makeTFRP in EEG Package v3 for details on TFR computation
+
+% Input
+% -----
+% S    : signals = time x Trials
+% timeVec    : absolute time values for trial
+% freqVec    : frequencies over which to calculate TF energy
+% Fs   : sampling frequency
+% width: number of cycles in wavelet (> 5 advisable)
+% TimeInt: array specifying start and end times for baseline, e.g. [-4 -3]
+%
+% Output
+% ------
+% t    : time
+% f    : frequency
+% B    : phase-locking factor = frequency x time
+
+
+S = S';
+baseTime = find(timeVec >= timeInt(1) & timeVec <= timeInt(2));
+disp('Phase TFR Status: Initializing...');
+
+%Generate shifted expected relationships 
+complexSignal = zeros(length(freqVec),length(timeVec)); 
+for freq = 1 : length(freqVec) 
+    
+    complexSignal(freq,:) = GenComplexSignal(freq,timeVec,sampAlign); 
+    
+end
+
+for trial = 1 : size(S,1)
+    
+    for freq = 1 : length(freqVec)
+        %Get phase angle of EEG signal 
+        pAngle = energyvec(freqVec(freq),detrend(S(trial,:)),Fs,width); 
+        
+        %Subtract out the expected relationship aligned to event
+        pDiff(freq,:,trial) = pAngle - angle(complexSignal(freq,:)); 
+    end
+    
+end
+
+for sampT = 1 : size(pDiff,2)
+    for freq = 1 : size(pDiff,1)
+        
+        PhaseTFR(freq,sampT) = cirmean(pDiff(freq,sampT,:)); 
+        
+    end
+end
+ 
+
+
+end
+
+function [z1] = energyvec(f,s,Fs,width)
+% function y = energyvec(f,s,Fs,width)
+%
+% Return the complex component of the time-frequency representation using
+% morlet wavelet method 
+
+dt = 1/Fs;
+sf = f/width;
+st = 1/(2*pi*sf);
+
+t=-3.5*st:dt:3.5*st;
+m = morlet(f,t,width);
+y = conv(s,m);
+z0 = y./abs(y); %Normalize complex morlet (not necessary?)
+z1 = angle(z0); %Compute phase angle
+
+%Remove padding and get signal
+z1 = z1(ceil(length(m)/2):length(z1) - floor(length(m)/2)); 
+end
+
+function y = morlet(f,t,width)
+% function y = morlet(f,t,width)
+%
+% Morlet's wavelet for frequency f and time t.
+% The wavelet will be normalized so the total energy is 1.
+% width defines the ``width'' of the wavelet.
+% A value >= 5 is suggested.
+%
+% Ref: Tallon-Baudry et al., J. Neurosci. 15, 722-734 (1997)
+%
+% See also: PHASEGRAM, PHASEVEC, WAVEGRAM, ENERGY
+%
+% Ole Jensen, August 1998
+
+sf = f/width;
+st = 1/(2*pi*sf);
+A = 1/(st*sqrt(2*pi));
+
+% yes, this has been corrected to the right scaling across frequencies...
+% Complex Morlet Wavelet, can project real and complex domains (real and imag functions)
+y = A*exp(-t.^2/(2*st^2)).*exp(1i*2*pi*f.*t);
+end
+
+function complexSig = GenComplexSignal(freq,timeVec,sampAlign)
+%Generate arbitrary unit circle complex signal with defined frequency
+%Generate complex signal and shift by alignment sample index
+
+complexSig = cos(timeVec.*(freq*2*pi) - sampAlign)...
+    + 1i.*sin(timeVec.*(freq*2*pi) - sampAlign); 
+
+
+
+
+end
+
+

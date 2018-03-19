@@ -1,0 +1,150 @@
+%%Organization script for automated loading into EEGAnalyze Program
+%Run this program on a copy of the original DMAT files for file safety
+%Use this program prior to EEG analysis on DMAT files with filename type:
+%IISSCCB_Dmat.mat
+% Where:
+% I is intials
+% S is stimulation type
+% C is condition type
+% B is block number
+%Written by - Jerrold Jeyachandra 2016
+
+%Output Structure
+%S--> subjects --> A/C --> Pre/Post --> D Matrices/EEG Data
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+clear;
+
+%% Get Directory
+p = uigetdir('Select location of DMats...');
+cd(p);
+
+F = dir;
+
+%Remove filesystem rows
+F([F.isdir] == 1) = [];
+
+%% Create all uppercase field to eliminate issue of case-sensitivity in many of MATLAB's functions
+upperCell = upper({F.name});
+upperStruct = cell2struct(upperCell,'uName',1);
+[F(:).uName] = deal(upperStruct.uName);
+
+%%  Initialize variables
+%Indices based on standardized file name schema, change here if you have a
+%different schema - rest of script should work fine.
+ind_stim = 3:4;
+ind_initial = 1:2;
+ind_cond = 5:6;
+ind_block = 7;
+f_stim = {'Anodal' 'Cathodal'};
+f_cond = {'Pre' 'Post' 'Stim'};
+E = struct;
+
+sp = uigetdir('Select location of saved MAT file...');
+time = clock;
+strFile = ['[' num2str(time(1)) '-' num2str(time(2)) '-' num2str(time(3)) '-' num2str(time(4)) '-' num2str(time(5)) ']' ];
+save([sp '\EEGStructRDM' strFile], 'E', '-v7.3');
+
+%% Sort Struct (just in case filesystem sorts weirdly...)
+FCell = struct2cell(F);
+FFields = fields(F);
+szF = size(FCell);
+FCell = reshape(FCell, szF(1), []);
+FCell = FCell';
+FCell = sortrows(FCell,1);
+FCell = reshape(FCell',szF);
+FSorted = cell2struct(FCell,FFields,1);
+cell_F = struct2cell(FSorted);
+fNameC = {FSorted.uName};
+
+%% Get all subject initials, stimulation types and conditions
+sub_initials = unique(cellfun(@(x) x(ind_initial), cell_F(end,:), 'un', 0))';
+cond_type = sortrows(unique(cellfun(@(x) x(ind_cond), cell_F(end,:), 'un', 0)))';
+cond_type(end) = [];
+stim_type = sortrows(unique(cellfun(@(x) x(ind_stim), cell_F(end,:), 'un', 0)))';
+
+%% Organize struct
+for s = 1:length(sub_initials)
+    
+    %Grab all files with subject initials
+    subInd = ~cellfun('isempty',strfind(cellfun(@(x) x(ind_initial), fNameC, 'un', 0),sub_initials{s}));
+    
+    for stim = 1:length(stim_type)
+        
+        %Divide into anodal/cathodal conditions
+        stimInd = ~cellfun('isempty',strfind(cellfun(@(x) x(ind_stim), fNameC, 'un', 0),stim_type{stim}));
+        
+        for cond = 1:length(cond_type)
+            
+            %Divide into pre/post conditions (since no STIM EEG)
+            condInd = ~cellfun('isempty', strfind(cellfun(@(x) x(ind_cond), fNameC, 'un', 0), cond_type{cond}));
+            
+            %Grab current conditions
+            all_Ind = subInd & stimInd & condInd;
+            cur_Struct = FSorted(all_Ind);
+            
+            %Initialize transient variables
+            merge_T = [];
+            merge_EEG = [];
+            merge_END = [];
+            
+            %Load files, merge DMATs, EEG and organize into struct
+            counter = 1;
+            for m = 1:sum(all_Ind)
+                curFile = load(cur_Struct(m).name);
+                
+                %Merge if EEG is complete or if trigger is valid
+                if (isfield(curFile.D{1},'eegData') && ~isnan(mean(curFile.D{1}.eegData(:,1))) && ~sum(find(curFile.D{1}.eegData(:,20) == 255)))
+                    
+                    %Merge EEG and assign block number
+                    merge_EEG = [merge_EEG; curFile.D{1}.eegData(:,[1:6 20]) m*ones(size( curFile.D{1}.eegData,1),1)];
+                    
+                    %Grab target motion onset and end from D matrix
+                    X = [curFile.D{2:end}];
+                    goodTrials = [curFile.D{1}.good X(:).good];
+                    indGood = goodTrials == 0;
+                    
+                    tMotStart = [curFile.D{1}.tMotOn X(:).tMotOn];
+                    tMotEnd = [curFile.D{1}.tMotEnd X(:).tMotEnd];
+                    
+                    %Directional Parameters
+                    saccDir = ([curFile.D{1}.eyedec X(:).eyedec]' == 0) + 1; %Saccade direction
+                    targDir = ([curFile.D{1}.tdir X(:).tdir]' == 0) + 1;
+                    
+                    %Saccade onset
+                    tSPon = [curFile.D{1}.SPon X(:).SPon];
+                    
+                    mergerData = [zeros(size(tMotStart,2),1) 516*ones(size(tMotStart,2),1)...
+                        tSPon' tMotStart' tMotEnd' 999999*ones(size(tMotStart,2),1)...
+                        saccDir targDir ones(size(tMotStart,2),1)];
+                    
+                    mergerData(~indGood,:) = NaN;
+                    merge_T(:,:,counter) = mergerData;
+                    
+                    %Removal of bad trials
+                    trialMark = [curFile.D{1}.good [X(:).good]];
+                    badInd = trialMark == 1;
+                    
+                    merge_T(badInd,:,counter) = NaN;
+                    
+                    %Short fix for EEG start after trial begins
+                    if (curFile.D{1}.eegData(1,20) == 3)
+                        merge_T(1,:,counter) = 0;
+                    end
+                    
+                    counter = counter + 1;
+                    
+                end
+            end
+            
+            if sum(any(merge_T)) ~= 0
+                %Construct struct containing organized info for EEG analysis
+                E(s).(f_stim{stim}).(f_cond{cond}).EEG = merge_EEG;
+                E(s).(f_stim{stim}).(f_cond{cond}).T = merge_T;
+            end
+        end
+        
+    end
+    %Assign subject initial to each row of struct array
+    E(s).subInitials = sub_initials(s);
+    save([sp '\EEGStructRDM' strFile],'E', '-append');
+end
