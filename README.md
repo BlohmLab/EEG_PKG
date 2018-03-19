@@ -1,11 +1,11 @@
 # EEG_PKG
 A complete EEG analysis package for custom 4x1 HD-tDCS recording setup for measuring pre-post simulation effects on EEG response.
 
-This project was designed to work with a 4x1 HD-tDCS set-up using Brain-Vision V-amp: 
+This project was designed to work with a 4x1 HD-tDCS set-up using Brain-Vision V-amp an EyeLink trigger: 
 
 http://brainvision.co.uk/v-amp
 
-The equipment was set up to output a CSV file with headers: TIME|E1|E2|...|EN|FREQ|. With the 4x1 set-up used only E1-E5 were referred to in the script. E1 denotes the centre electrode, whereas E2-E5 denotes the 4 flanking electrodes. 
+The equipment was set up to output a CSV file with headers: TIME|E1|E2|...|EN|TRIGGER|FREQ|. With the 4x1 set-up used only E1-E5 were referred to in the script. E1 denotes the centre electrode, whereas E2-E5 denotes the 4 flanking electrodes. 
 
 EEGMerge are templates of how the file structure is generated for the main processing scripts. Sample toy data will be provided in the future so it's easier to get an idea without having to go through the code manually.
 
