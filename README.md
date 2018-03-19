@@ -7,7 +7,7 @@ http://brainvision.co.uk/v-amp
 
 The equipment was set up to output a CSV file with headers: TIME|E1|E2|...|EN|TRIGGER|FREQ|. With the 4x1 set-up used only E1-E5 were referred to in the script. E1 denotes the centre electrode, whereas E2-E5 denotes the 4 flanking electrodes. 
 
-EEGMerge are templates of how the file structure is generated for the main processing scripts. Sample toy data will be provided in the future so it's easier to get an idea without having to go through the code manually.
+EEGMerge are templates of how the file structure is generated for the main processing scripts. Sample toy data will be provided in the future so it's easier to get an idea without having to read the comments within the code.
 
 The main processing pipeline is easily done by the following: 
 
