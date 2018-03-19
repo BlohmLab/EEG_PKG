@@ -16,3 +16,5 @@ EEG = ProcessEEG('output of merging script.mat')
 ~~~
 
 This generates an object of EEGMatrixHandler class which contains a range of functions for generating visualizations, statistical analysis, and comparative analysis. EEGMatrixHandler supports both TFR and Time-Series analysis of EEG signals. By default a Surface Laplacian is computed over the 5 electrodes toward the centre electrode and a pseudo-Z score is computed. 
+
+TO-DO: Provide toy random example and play script.
