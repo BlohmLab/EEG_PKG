@@ -1,7 +1,7 @@
 # EEG_PKG
 A complete EEG analysis package for custom 4x1 HD-tDCS recording setup for measuring pre-post simulation effects on EEG response.
 
-This project was designed to work with a 4x1 HD-tDCS set-up using Brain-Vision V-amp an EyeLink trigger: 
+This project was designed to work with a 4x1 HD-tDCS set-up using Brain-Vision V-amp combined with an EyeLink trigger: 
 
 http://brainvision.co.uk/v-amp
 
